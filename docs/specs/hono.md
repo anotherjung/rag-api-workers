@@ -278,3 +278,94 @@ export default app;
 - `vitest.config.js`: Disabled isolatedStorage for workflow support
 - Database schema: Added metadata and created_at columns
 - Migrations: Properly structured in `/migrations/` directory
+
+## Recent Fixes and Troubleshooting
+
+### 🐛 Critical Workflow Fix (2025-07-13)
+
+#### Issue: Workflow Failing Silently
+**Problem**: The RAG workflow was creating successfully but failing during execution, resulting in no database records being created.
+
+**Error Message**: 
+```
+Invalid text provided to workflow workflow Instance b1af41a6-a08e-469b-b045-c5defa143500
+```
+
+**Root Cause**: Incorrect workflow payload structure - mismatch between workflow creation parameters and how the workflow accessed the data.
+
+#### Solution Applied
+
+**1. Fixed Workflow Creation (src/index.js:137-139)**
+```javascript
+// ❌ Before - Multiple incorrect attempts:
+const instance = await c.env.RAG_WORKFLOW.create({ 
+    payload: { text }  // Wrong!
+});
+// Also tried:
+const instance = await c.env.RAG_WORKFLOW.create({
+    text: text  // Also wrong!
+});
+
+// ✅ After - Correct format per Cloudflare docs:
+const instance = await c.env.RAG_WORKFLOW.create({
+    params: { text }
+});
+```
+
+**2. Fixed Workflow Payload Access (src/vectorize.js:14)**
+```javascript
+// ❌ Before - Incorrect access pattern:
+const { text, metadata = {} } = event;
+
+// ✅ After - Correct access via payload:
+const { text, metadata = {} } = event.payload;
+```
+
+#### Verification Results
+- **Test Instance**: `2c320057-4b2a-4f41-b2c8-18ec344588d3`
+- **Status**: Complete ✅
+- **Performance**: 
+  - Total workflow time: ~2.45s
+  - Database insert: 118ms
+  - AI embedding generation: 196ms
+  - Vector storage: 718ms
+- **Result**: Successfully created database record ID 5
+
+### 🔧 Database Migration Fix
+
+#### Issue: Migration Command Failing
+**Problem**: `npx wrangler d1 migrations apply rag-ai` failed with "No migrations folder found"
+
+**Solution**:
+1. Created `/migrations/` directory
+2. Moved migration file from `docs/db-migration.sql` to `migrations/0001_initial_setup.sql`
+3. Added `migrations_dir` configuration to wrangler.jsonc
+
+### 📝 Binding Name Corrections
+
+#### Issue: Incorrect Vectorize Binding
+**Original Code**: Used `VECTOR_INDEX` throughout
+**Fix**: Updated to correct binding name `VECTORIZE` matching wrangler.jsonc configuration
+
+### 🔍 Debugging Approach Used
+
+1. **Direct Database Test**: Created `/notes-direct` endpoint to bypass workflow
+2. **Step-by-Step Verification**: Tested each RAG pipeline step independently
+3. **MCP Tools Usage**: Used Cloudflare MCP tools for direct database access
+4. **Workflow Status Monitoring**: Tracked workflow execution details
+
+### ✅ Current Working State
+
+All components now functioning correctly:
+- Workflow processes notes through complete RAG pipeline
+- Database records created successfully
+- AI embeddings generated (768 dimensions)
+- Vectors stored in Vectorize index
+- Search functionality operational with relevance scoring
+
+### 🚀 Best Practices Learned
+
+1. **Workflow Parameters**: Always use `params` in `create()` and access via `event.payload`
+2. **Error Handling**: Workflows can fail silently - always verify execution
+3. **Local vs Production**: Some features (workflows, vectorize) have limited local support
+4. **Debugging Strategy**: Create bypass endpoints for testing individual components
