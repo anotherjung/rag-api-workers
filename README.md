@@ -45,8 +45,7 @@ curl "https://rag-ai-tutorial.jungno.workers.dev?q=batman"
 
 touch docs/specs/hono.md src/hono.js
 
-
-npx wrangler d1 migrations apply rag-ai
+touch docs/specs/chat-notes.md src/chat-notes.js
 
 # RAG AI Tutorial
 

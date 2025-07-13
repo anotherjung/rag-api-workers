@@ -39,13 +39,25 @@ app.get("/health", (c) => {
 app.get("/", async (c) => {
 	try {
 		const question = c.req.query("text") || "What is the square root of 9?";
+		const selectedModel = c.req.query("model") || "llama";
 		const isLocal = c.req.header("host")?.includes("localhost");
+
+		// Determine which model to use
+		let modelName = "";
+		if (selectedModel === "llama-70b") {
+			// High-capability 70B parameter model for complex tasks
+			modelName = "@cf/meta/llama-3.1-70b-instruct";
+		} else {
+			// Default lightweight model for fast responses
+			modelName = "@cf/meta/llama-3.2-1b-instruct";
+		}
 
 		if (isLocal) {
 			// Local development - simplified response
-			const answer = await c.env.AI.run("@cf/meta/llama-3.2-1b-instruct", {
+			const answer = await c.env.AI.run(modelName, {
 				messages: [{ role: "user", content: question }]
 			});
+			c.header('x-model-used', modelName);
 			return c.json({
 				...answer,
 				note: "Local mode - no vector search"
@@ -86,9 +98,9 @@ app.get("/", async (c) => {
 
 		const systemPrompt = "When answering the question or responding, use the context provided, if it is provided and relevant.";
 
-		// Generate response with context
+		// Generate response with selected model
 		const { response: answer } = await c.env.AI.run(
-			"@cf/meta/llama-3.2-1b-instruct",
+			modelName,
 			{
 				messages: [
 					...(notes.length ? [{ role: "system", content: contextMessage }] : []),
@@ -97,6 +109,9 @@ app.get("/", async (c) => {
 				]
 			}
 		);
+
+		// Add model header
+		c.header('x-model-used', modelName);
 
 		return c.json({
 			answer,
@@ -219,6 +234,44 @@ app.get("/search", async (c) => {
 	} catch (error) {
 		console.error("Search Error:", error);
 		return c.json({ error: "Search service unavailable" }, 503);
+	}
+});
+
+// Delete note endpoint - removes both database record and vector
+app.delete("/notes/:id", async (c) => {
+	try {
+		const { id } = c.req.param();
+		
+		if (!id) {
+			return c.json({ error: "Note ID is required" }, 400);
+		}
+
+		// Check if running locally
+		const isLocal = c.req.header("host")?.includes("localhost");
+		
+		if (isLocal) {
+			// Local development - return mock response
+			return c.json({ 
+				message: "Delete functionality disabled in local dev",
+				noteId: id,
+				note: "Vectorize local bindings not yet supported",
+				isLocal: true
+			});
+		}
+
+		// Production - delete from both D1 and Vectorize
+		// Delete from D1 database
+		const query = `DELETE FROM notes WHERE id = ?`;
+		const result = await c.env.DB.prepare(query).bind(id).run();
+		
+		// Delete from Vectorize
+		await c.env.VECTORIZE.deleteByIds([id]);
+		
+		// Return 204 No Content on successful deletion
+		return c.status(204);
+	} catch (error) {
+		console.error("Delete Error:", error);
+		return c.json({ error: "Failed to delete note" }, 500);
 	}
 });
 
