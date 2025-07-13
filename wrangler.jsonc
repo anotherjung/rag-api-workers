@@ -23,7 +23,8 @@
 		{
 		  "binding": "DB",
 		  "database_name": "rag-ai",
-		  "database_id": "b7d229ef-3f2a-421e-87a7-1a126b86f7a4"
+		  "database_id": "b7d229ef-3f2a-421e-87a7-1a126b86f7a4",
+		  "migrations_dir": "migrations"
 		}
 	  ],
 	  "workflows": [

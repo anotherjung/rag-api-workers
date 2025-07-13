@@ -8,7 +8,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { RAGWorkflow } from "./vectorize";
-import { vectorAgent } from "./agents/vector-agent";
 
 // Export workflow for registration
 export { RAGWorkflow };
@@ -36,16 +35,78 @@ app.get("/health", (c) => {
 	});
 });
 
-// Default route - AI demo
+// Main RAG query endpoint - uses context from vector search
 app.get("/", async (c) => {
 	try {
-		const answer = await c.env.AI.run("@cf/meta/llama-3.2-1b-instruct", {
-			messages: [{ role: "user", content: "What is the square root of 9?" }]
+		const question = c.req.query("text") || "What is the square root of 9?";
+		const isLocal = c.req.header("host")?.includes("localhost");
+
+		if (isLocal) {
+			// Local development - simplified response
+			const answer = await c.env.AI.run("@cf/meta/llama-3.2-1b-instruct", {
+				messages: [{ role: "user", content: question }]
+			});
+			return c.json({
+				...answer,
+				note: "Local mode - no vector search"
+			});
+		}
+
+		// Generate embedding for the question
+		const embeddings = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", {
+			text: question
 		});
-		return c.json(answer);
+		const vectors = embeddings.data[0];
+
+		// Query Vectorize for similar content
+		const vectorQuery = await c.env.VECTORIZE.query(vectors, { topK: 5 });
+		
+		// Extract matching note IDs
+		const matchingIds = vectorQuery.matches
+			?.filter(match => match.score > 0.5)
+			?.map(match => match.id) || [];
+
+		// Retrieve notes from D1
+		let notes = [];
+		if (matchingIds.length > 0) {
+			const placeholders = matchingIds.map(() => '?').join(',');
+			const query = `SELECT * FROM notes WHERE id IN (${placeholders})`;
+			const { results } = await c.env.DB.prepare(query)
+				.bind(...matchingIds)
+				.all();
+			if (results) {
+				notes = results.map(note => note.text);
+			}
+		}
+
+		// Build context message
+		const contextMessage = notes.length
+			? `Context:\n${notes.map(note => `- ${note}`).join("\n")}`
+			: "";
+
+		const systemPrompt = "When answering the question or responding, use the context provided, if it is provided and relevant.";
+
+		// Generate response with context
+		const { response: answer } = await c.env.AI.run(
+			"@cf/meta/llama-3.2-1b-instruct",
+			{
+				messages: [
+					...(notes.length ? [{ role: "system", content: contextMessage }] : []),
+					{ role: "system", content: systemPrompt },
+					{ role: "user", content: question }
+				]
+			}
+		);
+
+		return c.json({
+			answer,
+			question,
+			context: notes,
+			matchCount: matchingIds.length
+		});
 	} catch (error) {
-		console.error("AI Error:", error);
-		return c.json({ error: "AI service unavailable" }, 503);
+		console.error("RAG Query Error:", error);
+		return c.json({ error: "Failed to process query" }, 500);
 	}
 });
 
@@ -72,9 +133,9 @@ app.post("/notes", async (c) => {
 			}, 201);
 		}
 
-		// Production - create workflow
-		const instance = await c.env.RAG_WORKFLOW.create({ 
-			payload: { text } 
+		// Production - create workflow  
+		const instance = await c.env.RAG_WORKFLOW.create({
+			params: { text }
 		});
 
 		return c.json({ 
@@ -89,7 +150,8 @@ app.post("/notes", async (c) => {
 	}
 });
 
-// Search endpoint
+
+// Search endpoint with full RAG capabilities
 app.get("/search", async (c) => {
 	try {
 		const query = c.req.query("q");
@@ -112,30 +174,42 @@ app.get("/search", async (c) => {
 			});
 		}
 
-		// Production - use vector agent for search
-		const searchResults = await vectorAgent.search(query, c.env, { 
-			topK: 5,
-			threshold: 0.5 
+		// Production - perform vector search with context
+		// Generate query embedding
+		const queryEmbedding = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", {
+			text: query
 		});
 		
-		// Get full text for matches from D1
+		// Search similar vectors
+		const matches = await c.env.VECTORIZE.query(queryEmbedding.data[0], {
+			topK: 10,
+			returnMetadata: true
+		});
+		
+		// Get full text and metadata for matches from D1
 		const results = [];
-		for (const result of searchResults) {
+		for (const match of matches.matches) {
+			if (match.score < 0.5) continue; // Filter low-relevance results
+			
 			const { results: notes } = await c.env.DB.prepare(
 				"SELECT * FROM notes WHERE id = ?"
-			).bind(result.id).all();
+			).bind(match.id).all();
 			
 			if (notes.length > 0) {
 				results.push({
-					id: result.id,
-					score: result.score,
-					normalizedScore: result.normalizedScore,
+					id: match.id,
+					score: match.score,
 					text: notes[0].text,
-					metadata: result.metadata,
-					agent: result.agent
+					metadata: {
+						...match.metadata,
+						created_at: notes[0].created_at
+					}
 				});
 			}
 		}
+
+		// Sort by score descending
+		results.sort((a, b) => b.score - a.score);
 		
 		return c.json({
 			query,

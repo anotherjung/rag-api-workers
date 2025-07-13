@@ -11,7 +11,7 @@ import { WorkflowEntrypoint } from "cloudflare:workers";
 export class RAGWorkflow extends WorkflowEntrypoint {
 	async run(event, step) {
 		const env = this.env;
-		const { text, metadata = {} } = event.payload || {};
+		const { text, metadata = {} } = event.payload;
 
 		// Validate input
 		if (!text || typeof text !== "string") {
