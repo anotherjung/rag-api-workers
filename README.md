@@ -20,8 +20,31 @@ touch docs/specs/vectorize.md src/vectorize.js
 
 npx wrangler run dev
 
-http://localhost:63243
+npx wrangler dev --remote
 
-curl -X POST http://localhost:63243 \
+http://localhost:56100
+
+curl -X POST http://localhost:56100 \
   -H "Content-Type: application/json" \
-  -d '{"text": "Machine learning is fascinating and powerful"}'
+  -d '{"text": "batman"}'
+
+curl "http://localhost:56100?q=artificial intelligence"
+
+npx wrangler tail --format pretty
+
+npm run deploy
+
+curl -X POST https://rag-ai-tutorial.jungno.workers.dev \
+  -H "Content-Type: application/json" \
+  -d '{"text": "batman"}'
+
+ https://rag-ai-tutorial.jungno.workers.dev
+
+ curl " https://rag-ai-tutorial.jungno.workers.dev?q=batman"
+
+
+touch docs/specs/hono.md src/hono.js
+
+
+## update wranger dev 
+npm i -D wrangler@latest

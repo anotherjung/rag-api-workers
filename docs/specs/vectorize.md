@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide implements a complete RAG (Retrieval-Augmented Generation) system using Cloudflare's stack: D1 for data storage, Vectorize for semantic search, and Workflows for durable processing.
+This guide documents the current RAG (Retrieval-Augmented Generation) implementation using Cloudflare Workers, AI, D1, Vectorize, and Workflows. This reflects the actual code state, not planned features.
 
 ## Documentation Reference
 https://developers.cloudflare.com/workers-ai/guides/tutorials/build-a-retrieval-augmented-generation-ai/#4-adding-embeddings-using-cloudflare-d1-and-vectorize
@@ -30,7 +30,7 @@ npx wrangler d1 execute rag-ai --remote --command "INSERT INTO notes (text) VALU
 
 ## Configuration (wrangler.jsonc)
 
-Complete configuration with all bindings:
+Current configuration with all bindings:
 ```json
 {
   "vectorize": [
@@ -56,9 +56,9 @@ Complete configuration with all bindings:
 }
 ```
 
-## Workflow Implementation
+## Current Implementation
 
-### Basic Workflow Structure (src/vectorize.js)
+### Workflow Implementation (src/vectorize.js)
 ```javascript
 import { WorkflowEntrypoint } from "cloudflare:workers";
 
@@ -71,216 +71,179 @@ export class RAGWorkflow extends WorkflowEntrypoint {
 }
 ```
 
-### Enhanced Workflow for Complete RAG Pipeline
-```javascript
-import { WorkflowEntrypoint } from "cloudflare:workers";
+**Status:** Basic workflow structure in place, logs "Hello World!" but doesn't process the RAG pipeline yet.
 
-export class RAGWorkflow extends WorkflowEntrypoint {
-  async run(event, step) {
-    // Step 1: Generate embedding from text
-    const embedding = await step.do("generate embedding", async () => {
-      const result = await this.env.AI.run("@cf/baai/bge-base-en-v1.5", {
-        text: event.params.text
-      });
-      return result.data[0]; // 768-dimensional vector
-    });
-
-    // Step 2: Store text in D1 database
-    const noteRecord = await step.do("store in database", async () => {
-      const { results } = await this.env.DB.prepare(
-        "INSERT INTO notes (text) VALUES (?) RETURNING *"
-      ).bind(event.params.text).run();
-      return results[0];
-    });
-
-    // Step 3: Store vector in Vectorize
-    await step.do("store vector", async () => {
-      await this.env.VECTORIZE.upsert([{
-        id: noteRecord.id.toString(),
-        values: embedding,
-        metadata: { 
-          text: event.params.text,
-          timestamp: new Date().toISOString()
-        }
-      }]);
-    });
-
-    return { 
-      success: true, 
-      noteId: noteRecord.id,
-      text: event.params.text 
-    };
-  }
-}
-```
-
-## Calling the Workflow
-
-### Integration in Main Worker (src/index.js)
+### Main Worker (src/index.js)
 ```javascript
 import { RAGWorkflow } from "./vectorize";
 export { RAGWorkflow };
 
 export default {
   async fetch(request, env, ctx) {
-    // Handle POST requests to create notes
-    if (request.method === "POST") {
-      const { text } = await request.json();
-      
-      // Create workflow instance
-      const instance = await env.RAG_WORKFLOW.create({ 
-        params: { text } 
-      });
-      
-      return new Response(JSON.stringify({ 
-        success: true,
-        workflowId: instance.id,
-        message: "Note processing started"
-      }));
-    }
-    
-    // Handle GET requests for semantic search
-    if (request.method === "GET") {
-      const url = new URL(request.url);
-      const query = url.searchParams.get("q");
-      
-      if (query) {
-        // Generate query embedding
-        const queryEmbedding = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
-          text: query
-        });
-        
-        // Search similar vectors
-        const matches = await env.VECTORIZE.query(queryEmbedding.data[0], {
-          topK: 5,
-          returnMetadata: true
-        });
-        
-        return new Response(JSON.stringify({
-          query,
-          results: matches.matches.map(match => ({
-            score: match.score,
-            text: match.metadata.text,
-            timestamp: match.metadata.timestamp
-          }))
+    try {
+      if (request.method === "POST") {
+        const { text } = await request.json();
+        console.log("Received text:", text);
+  
+        // For now, just return success without workflow
+        // TODO: Enable workflow once local dev issues are resolved
+        return new Response(JSON.stringify({ 
+          success: true,
+          message: "Text received successfully",
+          text: text,
+          note: "Workflow processing temporarily disabled in local dev"
         }));
       }
+
+      // Handle GET requests - simplified for now
+      if (request.method === "GET") {
+        const url = new URL(request.url);
+        const query = url.searchParams.get("q");
+        
+        if (query) {
+          return new Response(JSON.stringify({
+            message: "Search functionality temporarily disabled in local dev",
+            query: query,
+            note: "Vectorize local bindings not yet supported"
+          }));
+        }
+      }
+
+      // Default AI demo
+      const answer = await env.AI.run("@cf/meta/llama-3.2-1b-instruct", {
+        messages: [{ role: "user", content: "What is the square root of 9?" }]
+      });
+      return new Response(JSON.stringify(answer));
+    } catch (error) {
+      console.error("Error:", error);
+      return new Response(JSON.stringify({ 
+        error: error.message,
+        stack: error.stack 
+      }), { status: 500 });
     }
-    
-    // Default AI demo
-    const answer = await env.AI.run("@cf/meta/llama-3.2-1b-instruct", {
-      messages: [{ role: "user", content: "What is the square root of 9?" }]
-    });
-    return new Response(JSON.stringify(answer));
-  }
+  },
 };
 ```
 
-## Testing the Implementation
+## API Endpoints (Currently Implemented)
 
-### 1. Local Development
-```bash
-npm run dev
-```
+### GET `/` (Default)
+- **Description**: Returns AI-generated response to "What is the square root of 9?"
+- **Response**: JSON with AI model response
+- **Status**: ✅ Working
 
-### 2. Create a Note (POST)
+### GET `/?q=query`
+- **Description**: Currently returns a placeholder message
+- **Response**: JSON indicating search is temporarily disabled
+- **Status**: 🚧 Placeholder only
+
+### POST `/`
+- **Description**: Accepts text input, returns acknowledgment
+- **Request Body**: `{"text": "your text here"}`
+- **Response**: JSON confirmation without processing
+- **Status**: 🚧 Input accepted, no processing yet
+
+## Development Status
+
+### ✅ Implemented
+- Basic worker structure with error handling
+- POST endpoint accepting text input
+- GET endpoint with query parameter parsing
+- AI model integration for demo responses
+- Workflow class structure
+
+### 🚧 In Progress / Disabled
+- Workflow execution (disabled in local dev)
+- Vector search functionality (local bindings not supported)
+- Text embedding generation
+- D1 database operations
+- Vector storage in Vectorize
+
+### ❌ Not Implemented
+- Complete RAG pipeline
+- Semantic search with similarity scoring
+- Real-time vector operations
+- Context-aware AI responses using retrieved documents
+
+## Local Development Issues
+
+### Known Limitations
+1. **Vectorize Bindings**: Not fully supported in local development
+2. **Workflow Execution**: Times out in local environment
+3. **Remote Dependencies**: AI model calls require remote access
+
+### Current Workarounds
+- POST requests return success without processing
+- GET search returns placeholder messages
+- Default AI demo works independently
+
+## Testing
+
+### Working Tests
 ```bash
+# Test default AI functionality
+curl http://localhost:8787
+
+# Test POST endpoint (returns acknowledgment)
 curl -X POST http://localhost:8787 \
   -H "Content-Type: application/json" \
-  -d '{"text": "Machine learning is fascinating and powerful"}'
-```
+  -d '{"text": "Machine learning is fascinating"}'
 
-**Expected Response:**
-```json
-{
-  "success": true,
-  "workflowId": "workflow-12345",
-  "message": "Note processing started"
-}
-```
-
-### 3. Search Notes (GET)
-```bash
+# Test search placeholder
 curl "http://localhost:8787?q=artificial intelligence"
 ```
 
-**Expected Response:**
+### Expected Responses
+
+**GET (Default):**
 ```json
 {
-  "query": "artificial intelligence",
-  "results": [
-    {
-      "score": 0.85,
-      "text": "Machine learning is fascinating and powerful",
-      "timestamp": "2025-01-13T10:30:00.000Z"
-    }
-  ]
+  "response": "The square root of 9 is 3.",
+  "usage": {"prompt_tokens": 20, "completion_tokens": 11, "total_tokens": 31}
 }
 ```
 
-### 4. Monitor Workflow Execution
-```bash
-npx wrangler tail
+**POST:**
+```json
+{
+  "success": true,
+  "message": "Text received successfully",
+  "text": "Machine learning is fascinating",
+  "note": "Workflow processing temporarily disabled in local dev"
+}
 ```
 
-## Deployment
+**GET with Query:**
+```json
+{
+  "message": "Search functionality temporarily disabled in local dev",
+  "query": "artificial intelligence",
+  "note": "Vectorize local bindings not yet supported"
+}
+```
 
+### Deployment for Full Functionality
 ```bash
 npm run deploy
 ```
 
-Test deployed version:
-```bash
-# Create note
-curl -X POST https://rag-ai-tutorial.your-subdomain.workers.dev \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Cloud computing revolutionizes software development"}'
+**Note**: Full RAG functionality requires production deployment where all Cloudflare bindings are fully supported.
 
-# Search notes
-curl "https://rag-ai-tutorial.your-subdomain.workers.dev?q=cloud technology"
-```
+## Next Implementation Steps
 
-## Architecture Overview
+1. **Enable Workflow Processing** in production environment
+2. **Implement Text Embedding** using `@cf/baai/bge-base-en-v1.5`
+3. **Add D1 Database Operations** for text storage
+4. **Implement Vector Storage** in Vectorize
+5. **Build Semantic Search** with similarity matching
+6. **Create Context-Aware Responses** combining search results with AI generation
 
-### Data Flow
-1. **Text Input** → HTTP POST request with JSON body
-2. **Workflow Creation** → `env.RAG_WORKFLOW.create({ params: { text } })`
-3. **Embedding Generation** → AI model converts text to 768-dimensional vector
-4. **Database Storage** → Text stored in D1 with auto-generated ID
-5. **Vector Storage** → Embedding stored in Vectorize with metadata
-6. **Search Query** → HTTP GET with query parameter
-7. **Semantic Search** → Query embedding matched against stored vectors
-8. **Results Return** → Ranked results with similarity scores
+## Architecture Notes
 
-### Key Concepts
+- **Serverless**: Runs on Cloudflare Workers platform
+- **Durable Workflows**: For multi-step RAG processing
+- **Edge AI**: Model inference at the edge
+- **Vector Database**: Semantic search capabilities
+- **SQL Database**: Structured data storage
 
-- **Vector Index**: 768-dimensional space for semantic similarity
-- **Durable Workflows**: Fault-tolerant processing with automatic retries
-- **Step Isolation**: Each workflow step creates a checkpoint
-- **Cosine Similarity**: Metric for comparing vector similarity
-- **Metadata Storage**: Additional context stored with vectors
-
-### Performance Considerations
-
-- **Embedding Generation**: ~100-300ms per text
-- **Vector Storage**: ~50-100ms per operation
-- **Search Latency**: ~10-50ms for similarity queries
-- **Workflow Durability**: Survives worker restarts and failures
-- **Concurrency**: Multiple workflows execute independently
-
-### Error Handling
-
-The workflow system automatically handles:
-- Network timeouts and retries
-- Partial failures with step-level recovery
-- Resource unavailability with exponential backoff
-- Data consistency across multiple services
-
-### Next Steps
-
-1. **Enhanced Search**: Add filtering by metadata (date, categories)
-2. **Batch Processing**: Handle multiple texts in single workflow
-3. **Real-time Updates**: Implement vector updates and deletions
-4. **Advanced RAG**: Integrate with LLM for context-aware responses
-5. **Authentication**: Add API key or token-based access control
-6. **Analytics**: Track usage patterns and search performance
+**Current State**: Foundation implemented, RAG pipeline pending production deployment.
