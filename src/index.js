@@ -8,8 +8,38 @@
  * Learn more at https://developers.cloudflare.com/workers/
  */
 
+import { RAGWorkflow } from "./vectorize";
+export { RAGWorkflow };
+
 export default {
 	async fetch(request, env, ctx) {
-		return new Response('Hello World!');
+		console.log(request);
+
+		if (request.method === "POST") {
+			const { text } = await request.json();
+	  
+			// Create workflow instance
+			const instance = await env.RAG_WORKFLOW.create({ 
+			  params: { text } 
+			});
+	  
+			return new Response(JSON.stringify({ 
+			  success: true,
+			  workflowId: instance.id,
+			  message: "Note processing started"
+			}));
+		  }
+		  else {
+			const answer = await env.AI.run("@cf/meta/llama-3.2-1b-instruct", {
+				messages: [
+					{
+						role: "user",
+						content: "What is the square root of 9?",
+					},
+				],
+			})
+			return new Response(JSON.stringify(answer));
+		  }
 	},
 };
+

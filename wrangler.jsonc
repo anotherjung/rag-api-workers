@@ -9,7 +9,30 @@
 	"compatibility_date": "2025-06-28",
 	"observability": {
 		"enabled": true
-	}
+	},
+	"ai": {
+		"binding": "AI"
+	},
+	"vectorize": [
+		{
+			"binding": "VECTORIZE",
+			"index_name": "vector-index"
+		}
+	],
+	"d1_databases": [
+		{
+		  "binding": "DB",
+		  "database_name": "rag-ai",
+		  "database_id": "b7d229ef-3f2a-421e-87a7-1a126b86f7a4"
+		}
+	  ],
+	  "workflows": [
+		{
+		  "name": "rag",
+		  "binding": "RAG_WORKFLOW",
+		  "class_name": "RAGWorkflow"
+		}
+	  ]
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
@@ -44,4 +67,5 @@
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
 	 */
 	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
+
 }
