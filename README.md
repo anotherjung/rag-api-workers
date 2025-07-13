@@ -40,11 +40,13 @@ curl -X POST https://rag-ai-tutorial.jungno.workers.dev \
 
  https://rag-ai-tutorial.jungno.workers.dev
 
- curl " https://rag-ai-tutorial.jungno.workers.dev?q=batman"
+curl "https://rag-ai-tutorial.jungno.workers.dev?q=batman"
 
 
 touch docs/specs/hono.md src/hono.js
 
+
+npx wrangler d1 migrations apply rag-ai
 
 ## update wranger dev 
 npm i -D wrangler@latest
