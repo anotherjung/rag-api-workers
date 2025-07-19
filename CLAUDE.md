@@ -14,15 +14,29 @@ This is a Cloudflare Workers project implementing a Retrieval-Augmented Generati
 ## Development Commands
 
 ### Core Development
-- `pnpm run dev` or `npm start` - Start local development server with Wrangler
-- `npx wrangler dev --remote` - Run development server with remote resources (as noted in R1.md)
-- `pnpm run deploy` - Deploy to Cloudflare Workers
-- `pnpm test` - Run tests with Vitest
+- `npm run dev` or `npm start` - Start local development server with Wrangler
+- `npx wrangler dev --remote` - Run development server with remote resources (recommended for full functionality)
+- `npm run deploy` - Deploy to Cloudflare Workers  
+- `npm test` - Run tests with Vitest
+
+### Database Management
+- `npx wrangler d1 migrations apply rag-ai --remote` - Apply migrations to production database
+- `npx wrangler d1 migrations apply rag-ai --local` - Apply migrations to local database
+- `npx wrangler d1 execute rag-ai --remote --command="SELECT * FROM notes LIMIT 5;"` - Query production database
+- `npx wrangler d1 list` - List all D1 databases
+
+### Vector Operations
+- `npx wrangler vectorize list` - List all Vectorize indexes
+- `npx wrangler vectorize create vector-index --dimensions=768 --metric=cosine` - Create new vector index
+
+### Monitoring
+- `npx wrangler tail --format pretty` - View real-time logs from deployed worker
 
 ### Testing
 - Tests use Vitest with Cloudflare Workers pool for integration testing
 - Test configuration is in `vitest.config.js` which references `wrangler.jsonc`
 - Tests include both unit-style and integration-style examples
+- Comprehensive testing guide available in `docs/specs/testing.md`
 
 ## Architecture
 
@@ -46,10 +60,11 @@ This is a Cloudflare Workers project implementing a Retrieval-Augmented Generati
 The worker implements a RAG system with:
 
 #### API Endpoints (Hono.js)
-- `GET /` - Basic AI demo endpoint
-- `GET /health` - Health check endpoint
-- `POST /notes` - Create and index new documents
-- `GET /search?q=query` - Semantic search using vector similarity
+- `GET /?text=query&model=llama|llama-70b` - RAG-powered AI query with context retrieval
+- `GET /health` - Health check endpoint  
+- `POST /notes` - Create and index new documents via RAG workflow
+- `GET /search?q=query` - Direct semantic search using vector similarity
+- `DELETE /notes/:id` - Remove note from both database and vector index
 
 #### RAG Workflow
 1. **Document Ingestion**: Accepts text via POST /notes
@@ -63,51 +78,76 @@ The worker implements a RAG system with:
 - Future agents planned for keyword search and metadata filtering
 
 ### Configuration
-- All bindings configured in `wrangler.jsonc`
-- AI models: `@cf/meta/llama-3.2-1b-instruct` (generation), `@cf/baai/bge-base-en-v1.5` (embeddings)
-- Database: D1 with notes table
-- Vector index: 768-dimensional cosine similarity
+- All bindings configured in `wrangler.jsonc` 
+- AI models: 
+  - `@cf/meta/llama-3.2-1b-instruct` (default, fast)
+  - `@cf/meta/llama-3.1-70b-instruct` (high-capability, via `model=llama-70b` param)
+  - `@cf/baai/bge-base-en-v1.5` (embeddings, 768 dimensions)
+- Database: D1 with `notes` table (see `migrations/0001_initial_setup.sql`)
+- Vector index: 768-dimensional cosine similarity, threshold 0.5 for search results
 
 ## Database Setup
 
-Before running the application, ensure the database schema is up to date:
+The database schema is managed through migrations in the `migrations/` directory:
 
 ```bash
-# Create or update the notes table with metadata support
-npx wrangler d1 execute rag-ai --remote --file docs/db-migration.sql
+# Apply all pending migrations to production
+npx wrangler d1 migrations apply rag-ai --remote
+
+# Apply migrations to local development database  
+npx wrangler d1 migrations apply rag-ai --local
 ```
+
+Current schema includes `notes` table with `id`, `text`, `created_at` fields.
 
 ## Development Notes
 
-- This project implements a hybrid RAG architecture with Hono.js
-- Local development has limitations for Vectorize and Workflows
-- Production deployment required for full functionality
-- Observability is enabled in the Wrangler configuration
-- The test setup includes both unit and integration testing patterns for Workers
-- Configuration uses JSONC format for Wrangler settings with extensive documentation comments
+### Local vs Production Differences
+- **Local development**: Limited Vectorize and Workflows support, returns mock responses
+- **Production deployment**: Full RAG functionality with vector search and workflows
+- Use `npx wrangler dev --remote` for accessing production resources during development
+
+### Architecture Patterns
+- **Agent-based search**: Extensible agent system in `src/agents/` (BaseAgent → VectorAgent)
+- **Dual model support**: Fast Llama-1B for efficiency, Llama-70B for complex reasoning  
+- **Context-aware responses**: Vector search results used as context for AI generation
+- **Error boundaries**: Local/production mode detection with appropriate fallbacks
+
+### Testing Approach
+- Vitest with Cloudflare Workers pool for realistic testing environment
+- Comprehensive test scenarios documented in `docs/specs/testing.md`
+- Configuration uses JSONC format with extensive documentation comments
 
 ## Testing the Implementation
 
 ### Local Development (Limited)
 ```bash
-# Test health check
-curl http://localhost:8787/health # ports will change
-curl http://localhost:59891/health
+# Test health check (ports change on each restart)
+curl http://localhost:8787/health
 
-# Test POST endpoint (mock response in local)
+# Test RAG query with different models
+curl "http://localhost:8787/?text=What+is+machine+learning&model=llama-70b"
+curl "http://localhost:8787/?text=Hello"  # defaults to llama-1b
+
+# Test note creation (mock response in local)
 curl -X POST http://localhost:8787/notes \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Machine learning is fascinating"}'
-
- curl -X POST http://localhost:59891/notes \
   -H "Content-Type: application/json" \
   -d '{"text": "Machine learning is fascinating"}'
 
 # Test search (mock response in local)
 curl "http://localhost:8787/search?q=machine+learning"
-curl "http://localhost:59891/search?q=machine+learning"
-
 ```
 
 ### Production Testing
-After deployment (`npm run deploy`), all features including vector search and workflows will be functional.
+After deployment (`npm run deploy`), test full RAG functionality:
+
+```bash
+# Test production endpoints (replace with your worker URL)
+curl "https://rag-ai-tutorial.jungno.workers.dev/?text=What+is+AI&model=llama-70b"
+curl -X POST https://rag-ai-tutorial.jungno.workers.dev/notes \
+  -H "Content-Type: application/json" \
+  -d '{"text": "AI is transforming industries"}'
+curl "https://rag-ai-tutorial.jungno.workers.dev/search?q=AI"
+```
+
+See `docs/specs/testing.md` for comprehensive testing scenarios and expected behaviors.
