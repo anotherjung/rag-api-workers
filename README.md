@@ -1,4 +1,4 @@
-# RAG AI Tutorial
+# RAG API WORKERS AI
 
 [![Deploy Status](https://img.shields.io/badge/deploy-live-brightgreen)](https://rag-ai-tutorial.jungno.workers.dev)
 [![Cloudflare Workers](https://img.shields.io/badge/platform-Cloudflare%20Workers-orange)](https://workers.cloudflare.com)
