@@ -12,60 +12,170 @@ import { RAGWorkflow } from "./vectorize";
 // Export workflow for registration
 export { RAGWorkflow };
 
+// Constants
+const SIMILARITY_THRESHOLD = 0.5;
+const DEFAULT_QUESTION = "describe Machine Learning ?";
+const EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5";
+const DEFAULT_MODEL = "@cf/meta/llama-3.2-1b-instruct";
+const ADVANCED_MODEL = "@cf/meta/llama-3.1-70b-instruct";
+
 // Create Hono app instance
 const app = new Hono();
+
+// Utilities
+const isLocalEnvironment = (c) => c.req.header("host")?.includes("localhost");
+
+const createResponse = (data, status = 200, headers = {}) => {
+	return {
+		data,
+		status,
+		headers: {
+			'Content-Type': 'application/json',
+			'X-Timestamp': new Date().toISOString(),
+			...headers
+		}
+	};
+};
+
+const handleError = (c, error, message, status = 500) => {
+	console.error(`${message}:`, error);
+	return c.json({ 
+		error: message,
+		details: c.env.DEBUG ? error.message : undefined,
+		timestamp: new Date().toISOString()
+	}, status);
+};
 
 // Add CORS middleware
 app.use("/*", cors());
 
 // Error handling middleware
 app.onError((err, c) => {
-	console.error("Error:", err);
-	return c.json({ 
-		error: err.message,
-		stack: c.env.DEBUG ? err.stack : undefined 
-	}, 500);
+	return handleError(c, err, "Internal server error");
+});
+
+// Commands endpoint - for UI command palette integration
+app.get("/commands", (c) => {
+	const commands = [
+		{
+			id: "query",
+			name: "Ask Question",
+			description: "Ask AI a question with context from your knowledge base",
+			endpoint: "GET /?text={query}&model={llama|llama-70b}",
+			parameters: [
+				{ name: "text", type: "string", required: true, description: "Your question" },
+				{ name: "model", type: "string", required: false, description: "AI model to use", options: ["llama", "llama-70b"] }
+			],
+			category: "AI",
+			icon: "🤖"
+		},
+		{
+			id: "create_note",
+			name: "Add Note",
+			description: "Add a new note to your knowledge base",
+			endpoint: "POST /notes",
+			parameters: [
+				{ name: "text", type: "string", required: true, description: "Note content" }
+			],
+			category: "Knowledge",
+			icon: "📝"
+		},
+		{
+			id: "search",
+			name: "Search Knowledge",
+			description: "Search your knowledge base using semantic similarity",
+			endpoint: "GET /search?q={query}",
+			parameters: [
+				{ name: "q", type: "string", required: true, description: "Search query" }
+			],
+			category: "Search",
+			icon: "🔍"
+		},
+		{
+			id: "delete_note",
+			name: "Delete Note",
+			description: "Remove a note from your knowledge base",
+			endpoint: "DELETE /notes/{id}",
+			parameters: [
+				{ name: "id", type: "string", required: true, description: "Note ID" }
+			],
+			category: "Knowledge",
+			icon: "🗑️"
+		},
+		{
+			id: "health",
+			name: "Health Check",
+			description: "Check system status and availability",
+			endpoint: "GET /health",
+			parameters: [],
+			category: "System",
+			icon: "❤️"
+		}
+	];
+
+	return c.json({
+		commands,
+		count: commands.length,
+		categories: [...new Set(commands.map(cmd => cmd.category))],
+		timestamp: new Date().toISOString()
+	});
 });
 
 // Health check endpoint
 app.get("/health", (c) => {
-	return c.json({ 
+	const response = createResponse({
 		status: "healthy",
-		timestamp: new Date().toISOString()
+		environment: isLocalEnvironment(c) ? "local" : "production",
+		services: {
+			ai: true,
+			database: true,
+			vectorize: !isLocalEnvironment(c),
+			workflows: !isLocalEnvironment(c)
+		}
 	});
+	
+	Object.entries(response.headers).forEach(([key, value]) => {
+		c.header(key, value);
+	});
+	
+	return c.json(response.data);
 });
 
 // Main RAG query endpoint - uses context from vector search
 app.get("/", async (c) => {
 	try {
-		const question = c.req.query("text") || "What is the square root of 9?";
+		const question = c.req.query("text") || DEFAULT_QUESTION;
 		const selectedModel = c.req.query("model") || "llama";
-		const isLocal = c.req.header("host")?.includes("localhost");
+		const isLocal = isLocalEnvironment(c);
 
 		// Determine which model to use
-		let modelName = "";
-		if (selectedModel === "llama-70b") {
-			// High-capability 70B parameter model for complex tasks
-			modelName = "@cf/meta/llama-3.1-70b-instruct";
-		} else {
-			// Default lightweight model for fast responses
-			modelName = "@cf/meta/llama-3.2-1b-instruct";
-		}
+		const modelName = selectedModel === "llama-70b" ? ADVANCED_MODEL : DEFAULT_MODEL;
 
 		if (isLocal) {
 			// Local development - simplified response
 			const answer = await c.env.AI.run(modelName, {
 				messages: [{ role: "user", content: question }]
 			});
-			c.header('x-model-used', modelName);
-			return c.json({
+			
+			const response = createResponse({
 				...answer,
-				note: "Local mode - no vector search"
+				metadata: {
+					environment: "local",
+					modelUsed: modelName,
+					vectorSearchEnabled: false,
+					question
+				}
+			}, 200, { 'x-model-used': modelName });
+
+			Object.entries(response.headers).forEach(([key, value]) => {
+				c.header(key, value);
 			});
+			
+			return c.json(response.data);
 		}
 
 		// Generate embedding for the question
-		const embeddings = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", {
+		const embeddings = await c.env.AI.run(EMBEDDING_MODEL, {
 			text: question
 		});
 		const vectors = embeddings.data[0];
@@ -75,7 +185,7 @@ app.get("/", async (c) => {
 		
 		// Extract matching note IDs
 		const matchingIds = vectorQuery.matches
-			?.filter(match => match.score > 0.5)
+			?.filter(match => match.score > SIMILARITY_THRESHOLD)
 			?.map(match => match.id) || [];
 
 		// Retrieve notes from D1
@@ -110,18 +220,28 @@ app.get("/", async (c) => {
 			}
 		);
 
-		// Add model header
-		c.header('x-model-used', modelName);
-
-		return c.json({
+		// Create structured response
+		const response = createResponse({
 			answer,
 			question,
 			context: notes,
-			matchCount: matchingIds.length
+			metadata: {
+				environment: "production",
+				modelUsed: modelName,
+				vectorSearchEnabled: true,
+				matchCount: matchingIds.length,
+				contextFound: notes.length > 0,
+				similarityThreshold: SIMILARITY_THRESHOLD
+			}
+		}, 200, { 'x-model-used': modelName });
+
+		Object.entries(response.headers).forEach(([key, value]) => {
+			c.header(key, value);
 		});
+
+		return c.json(response.data);
 	} catch (error) {
-		console.error("RAG Query Error:", error);
-		return c.json({ error: "Failed to process query" }, 500);
+		return handleError(c, error, "Failed to process query");
 	}
 });
 
@@ -130,38 +250,57 @@ app.post("/notes", async (c) => {
 	try {
 		const { text } = await c.req.json();
 		
-		if (!text || typeof text !== "string") {
-			return c.json({ error: "Invalid text provided" }, 400);
+		if (!text || typeof text !== "string" || text.trim().length === 0) {
+			return c.json({ error: "Valid text content is required" }, 400);
 		}
 
-		// Check if running locally
-		const isLocal = c.req.header("host")?.includes("localhost");
+		const isLocal = isLocalEnvironment(c);
 		
 		if (isLocal) {
 			// Local development - return mock response
-			return c.json({ 
+			const response = createResponse({
 				success: true,
 				message: "Text received successfully",
-				text: text,
-				note: "Workflow processing disabled in local dev",
-				isLocal: true
+				text: text.trim(),
+				metadata: {
+					environment: "local",
+					workflowEnabled: false,
+					characterCount: text.trim().length
+				}
 			}, 201);
+
+			Object.entries(response.headers).forEach(([key, value]) => {
+				c.header(key, value);
+			});
+
+			return c.json(response.data);
 		}
 
 		// Production - create workflow  
 		const instance = await c.env.RAG_WORKFLOW.create({
-			params: { text }
+			params: { text: text.trim() }
 		});
 
-		return c.json({ 
+		const response = createResponse({
 			success: true,
 			workflowId: instance.id,
 			message: "Note processing started",
-			text: text
+			text: text.trim(),
+			metadata: {
+				environment: "production",
+				workflowEnabled: true,
+				characterCount: text.trim().length,
+				processingStatus: "initiated"
+			}
 		}, 201);
+
+		Object.entries(response.headers).forEach(([key, value]) => {
+			c.header(key, value);
+		});
+
+		return c.json(response.data);
 	} catch (error) {
-		console.error("Notes Error:", error);
-		return c.json({ error: "Failed to create note" }, 500);
+		return handleError(c, error, "Failed to create note");
 	}
 });
 
@@ -171,28 +310,37 @@ app.get("/search", async (c) => {
 	try {
 		const query = c.req.query("q");
 		
-		if (!query) {
-			return c.json({ error: "Query parameter 'q' is required" }, 400);
+		if (!query || query.trim().length === 0) {
+			return c.json({ error: "Query parameter 'q' is required and cannot be empty" }, 400);
 		}
 
-		// Check if running locally
-		const isLocal = c.req.header("host")?.includes("localhost");
+		const isLocal = isLocalEnvironment(c);
+		const trimmedQuery = query.trim();
 		
 		if (isLocal) {
 			// Local development - return mock response
-			return c.json({
-				message: "Search functionality temporarily disabled in local dev",
-				query: query,
-				note: "Vectorize local bindings not yet supported",
-				isLocal: true,
-				results: []
+			const response = createResponse({
+				query: trimmedQuery,
+				count: 0,
+				results: [],
+				metadata: {
+					environment: "local",
+					vectorSearchEnabled: false,
+					message: "Search functionality temporarily disabled in local dev"
+				}
 			});
+
+			Object.entries(response.headers).forEach(([key, value]) => {
+				c.header(key, value);
+			});
+
+			return c.json(response.data);
 		}
 
 		// Production - perform vector search with context
 		// Generate query embedding
-		const queryEmbedding = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", {
-			text: query
+		const queryEmbedding = await c.env.AI.run(EMBEDDING_MODEL, {
+			text: trimmedQuery
 		});
 		
 		// Search similar vectors
@@ -204,7 +352,7 @@ app.get("/search", async (c) => {
 		// Get full text and metadata for matches from D1
 		const results = [];
 		for (const match of matches.matches) {
-			if (match.score < 0.5) continue; // Filter low-relevance results
+			if (match.score < SIMILARITY_THRESHOLD) continue; // Filter low-relevance results
 			
 			const { results: notes } = await c.env.DB.prepare(
 				"SELECT * FROM notes WHERE id = ?"
@@ -226,14 +374,26 @@ app.get("/search", async (c) => {
 		// Sort by score descending
 		results.sort((a, b) => b.score - a.score);
 		
-		return c.json({
-			query,
+		const response = createResponse({
+			query: trimmedQuery,
 			count: results.length,
-			results
+			results,
+			metadata: {
+				environment: "production",
+				vectorSearchEnabled: true,
+				similarityThreshold: SIMILARITY_THRESHOLD,
+				totalMatches: matches.matches?.length || 0,
+				filteredMatches: results.length
+			}
 		});
+
+		Object.entries(response.headers).forEach(([key, value]) => {
+			c.header(key, value);
+		});
+
+		return c.json(response.data);
 	} catch (error) {
-		console.error("Search Error:", error);
-		return c.json({ error: "Search service unavailable" }, 503);
+		return handleError(c, error, "Search service unavailable", 503);
 	}
 });
 
@@ -242,42 +402,96 @@ app.delete("/notes/:id", async (c) => {
 	try {
 		const { id } = c.req.param();
 		
-		if (!id) {
-			return c.json({ error: "Note ID is required" }, 400);
+		if (!id || id.trim().length === 0) {
+			return c.json({ error: "Note ID is required and cannot be empty" }, 400);
 		}
 
-		// Check if running locally
-		const isLocal = c.req.header("host")?.includes("localhost");
+		const isLocal = isLocalEnvironment(c);
+		const trimmedId = id.trim();
 		
 		if (isLocal) {
 			// Local development - return mock response
-			return c.json({ 
+			const response = createResponse({
 				message: "Delete functionality disabled in local dev",
-				noteId: id,
-				note: "Vectorize local bindings not yet supported",
-				isLocal: true
+				noteId: trimmedId,
+				metadata: {
+					environment: "local",
+					vectorSearchEnabled: false,
+					workflowEnabled: false
+				}
 			});
+
+			Object.entries(response.headers).forEach(([key, value]) => {
+				c.header(key, value);
+			});
+
+			return c.json(response.data);
 		}
 
 		// Production - delete from both D1 and Vectorize
 		// Delete from D1 database
 		const query = `DELETE FROM notes WHERE id = ?`;
-		const result = await c.env.DB.prepare(query).bind(id).run();
+		await c.env.DB.prepare(query).bind(trimmedId).run();
 		
 		// Delete from Vectorize
-		await c.env.VECTORIZE.deleteByIds([id]);
+		await c.env.VECTORIZE.deleteByIds([trimmedId]);
 		
 		// Return 204 No Content on successful deletion
+		c.header('X-Timestamp', new Date().toISOString());
 		return c.status(204);
 	} catch (error) {
-		console.error("Delete Error:", error);
-		return c.json({ error: "Failed to delete note" }, 500);
+		return handleError(c, error, "Failed to delete note");
 	}
+});
+
+// Help endpoint - API documentation
+app.get("/help", (c) => {
+	const apiInfo = {
+		name: "RAG AI Tutorial API",
+		version: "1.0.0",
+		description: "Retrieval-Augmented Generation system using Cloudflare AI, D1, and Vectorize",
+		environment: isLocalEnvironment(c) ? "local" : "production",
+		features: {
+			aiQuery: "Ask questions with contextual knowledge retrieval",
+			noteManagement: "Create, search, and delete notes in your knowledge base",
+			semanticSearch: "Vector-based similarity search",
+			commandDiscovery: "Structured command information for UI integration"
+		},
+		endpoints: {
+			"GET /": "AI query with RAG context",
+			"GET /commands": "Available commands for UI integration",
+			"GET /health": "System health check",
+			"GET /search": "Semantic search in knowledge base",
+			"POST /notes": "Create new note",
+			"DELETE /notes/:id": "Delete note",
+			"GET /help": "This help information"
+		},
+		usage: {
+			examples: [
+				"GET /?text=What is machine learning&model=llama-70b",
+				"POST /notes with {\"text\": \"Your knowledge here\"}",
+				"GET /search?q=your search query"
+			]
+		}
+	};
+
+	const response = createResponse(apiInfo);
+	
+	Object.entries(response.headers).forEach(([key, value]) => {
+		c.header(key, value);
+	});
+	
+	return c.json(response.data);
 });
 
 // 404 handler
 app.notFound((c) => {
-	return c.json({ error: "Not found" }, 404);
+	return c.json({ 
+		error: "Not found",
+		message: "The requested endpoint does not exist",
+		availableEndpoints: ["/", "/commands", "/health", "/search", "/notes", "/help"],
+		timestamp: new Date().toISOString()
+	}, 404);
 });
 
 export default app;

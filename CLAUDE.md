@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+remote url https://rag-ai-tutorial.jungno.workers.dev
+
 ## Project Overview
 
 This is a Cloudflare Workers project implementing a Retrieval-Augmented Generation (RAG) system using:
