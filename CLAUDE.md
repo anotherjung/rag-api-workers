@@ -2,7 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-remote url https://rag-ai-tutorial.jungno.workers.dev
+## Production Deployment
+
+Remote URL: https://rag-ai-tutorial.jungno.workers.dev
 
 ## Project Overview
 
@@ -63,21 +65,26 @@ The worker implements a RAG system with:
 
 #### API Endpoints (Hono.js)
 - `GET /?text=query&model=llama|llama-70b` - RAG-powered AI query with context retrieval
-- `GET /health` - Health check endpoint  
+- `GET /commands` - Command discovery endpoint for UI integration (returns structured command metadata)
+- `GET /health` - Enhanced health check with service status  
+- `GET /help` - API documentation and usage information
 - `POST /notes` - Create and index new documents via RAG workflow
 - `GET /search?q=query` - Direct semantic search using vector similarity
 - `DELETE /notes/:id` - Remove note from both database and vector index
 
-#### RAG Workflow
-1. **Document Ingestion**: Accepts text via POST /notes
-2. **Embedding Generation**: Converts text to vectors using `@cf/baai/bge-base-en-v1.5`
-3. **Storage**: Saves to D1 database and Vectorize index
-4. **Search**: Vector similarity search with agent-based architecture
+#### RAG Workflow (src/vectorize.js)
+Multi-step durable workflow using Cloudflare Workflows:
+1. **Document Ingestion**: Validates and accepts text via POST /notes
+2. **Database Storage**: Inserts record into D1 with metadata
+3. **Embedding Generation**: Converts text to 768-dimensional vectors using `@cf/baai/bge-base-en-v1.5`
+4. **Vector Indexing**: Stores embeddings in Vectorize with searchable metadata
+5. **Error Recovery**: Each step is durable and can retry on failure
 
-#### Agent Architecture
-- **BaseAgent**: Abstract base class for search strategies
-- **VectorAgent**: Implements semantic similarity search
-- Future agents planned for keyword search and metadata filtering
+#### Agent Architecture (src/agents/)
+Extensible search system designed for multiple retrieval strategies:
+- **BaseAgent**: Abstract class with score normalization and logging utilities
+- **VectorAgent**: Semantic similarity search using cosine distance
+- Future agents: Keyword search, metadata filtering, hybrid ranking
 
 ### Configuration
 - All bindings configured in `wrangler.jsonc` 
@@ -114,6 +121,9 @@ Current schema includes `notes` table with `id`, `text`, `created_at` fields.
 - **Dual model support**: Fast Llama-1B for efficiency, Llama-70B for complex reasoning  
 - **Context-aware responses**: Vector search results used as context for AI generation
 - **Error boundaries**: Local/production mode detection with appropriate fallbacks
+- **Durable workflows**: Multi-step document processing with automatic retry and recovery
+- **Structured responses**: Consistent JSON format with metadata across all endpoints
+- **Command discovery**: API introspection for building dynamic UIs and command palettes
 
 ### Testing Approach
 - Vitest with Cloudflare Workers pool for realistic testing environment
@@ -153,3 +163,23 @@ curl "https://rag-ai-tutorial.jungno.workers.dev/search?q=AI"
 ```
 
 See `docs/specs/testing.md` for comprehensive testing scenarios and expected behaviors.
+
+## Project Conventions
+
+### Documentation Standards
+- Write technical documentation in `docs/specs/` using bullet points and summaries for future developers
+- Focus on actionable information rather than verbose explanations
+- Include specific command examples and expected outputs
+
+### Response Format
+All API endpoints return structured JSON with consistent metadata including:
+- Environment detection (local vs production)
+- Model information and capabilities used
+- Processing timestamps and performance metrics
+- Error details with appropriate status codes
+
+### Development Workflow
+- Use `npx wrangler dev --remote` for full functionality testing
+- Apply database migrations to both local and remote environments
+- Test production endpoints after deployment to verify full RAG functionality
+- Monitor logs with `npx wrangler tail --format pretty` during development
